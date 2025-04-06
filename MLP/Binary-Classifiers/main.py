@@ -308,11 +308,21 @@ with torch.no_grad():
             qpu_loss_test_tab.append(qpu_loss)
             qpu_falsePred_test_tab.append(qpu_falsePred)
             
+            # Calculate error rates for this epoch
+            train_error = qpu_falsePred_tab[-1]/len(binary_train_loader.dataset)*100
+            test_error = qpu_falsePred_test_tab[-1]/len(binary_test_loader.dataset)*100
+            
+            # Print epoch stats
+            print(f"Digit {digit}, Epoch {epoch+1}/{args.epochs}: " 
+                  f"Training Error: {train_error:.2f}%, "
+                  f"Test Error: {test_error:.2f}%, "
+                  f"Train Loss: {qpu_loss_tab[-1]:.2f}, "
+                  f"Test Loss: {qpu_loss_test_tab[-1]:.2f}")
+            
             # Store error and loss at each epoch
             dataframe = updateDataframe(BASE_PATH, dataframe, 
                                      0, 0,  # Placeholder for exact values
-                                     np.array(qpu_falsePred_tab)[-1]/len(binary_train_loader.dataset)*100, 
-                                     np.array(qpu_falsePred_test_tab)[-1]/len(binary_test_loader.dataset)*100, 
+                                     train_error, test_error, 
                                      [0], [0],  # Placeholder for exact values
                                      qpu_loss_tab, qpu_loss_test_tab)
             
