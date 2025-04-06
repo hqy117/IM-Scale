@@ -252,6 +252,9 @@ def generate_mnist(args):
     N_data = args.N_data
     N_data_test = args.N_data_test
 
+    # Use a consistent dataset directory path
+    data_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'datasets')
+
     with torch.no_grad():
         if args.data_augmentation:
             transforms_train=[torchvision.transforms.ToTensor(), torchvision.transforms.RandomAffine(10, translate=(0.04, 0.04), scale=None, shear=None, interpolation=torchvision.transforms.InterpolationMode.NEAREST, fill=0), ReshapeTransform((-1,))]
@@ -261,7 +264,7 @@ def generate_mnist(args):
         transforms_test=[torchvision.transforms.ToTensor(), ReshapeTransform((-1,))]
 
         #Training data
-        mnist_train = torchvision.datasets.MNIST(root='./data', train=True, download=True,
+        mnist_train = torchvision.datasets.MNIST(root=data_root, train=True, download=True,
                                                 transform=torchvision.transforms.Compose(transforms_train),
                                                 target_transform=ReshapeTransformTarget(10, args))
 
@@ -281,7 +284,7 @@ def generate_mnist(args):
         train_loader = torch.utils.data.DataLoader(mnist_train, batch_size = args.batch_size, shuffle=True)
 
         #Testing data
-        mnist_test = torchvision.datasets.MNIST(root='./data', train=False, download=True,
+        mnist_test = torchvision.datasets.MNIST(root=data_root, train=False, download=True,
                                                 transform=torchvision.transforms.Compose(transforms_test),
                                                 target_transform=ReshapeTransformTarget(10, args))
 

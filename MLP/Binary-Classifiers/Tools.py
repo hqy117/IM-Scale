@@ -116,9 +116,11 @@ def generate_mnist(args):
     N_data = args.N_data
     N_data_test = args.N_data_test
 
-    # Use a consistent dataset directory path
-    data_root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'datasets')
-    
+    # Use a consistent dataset directory if provided
+    data_root = './data'
+    if hasattr(args, 'dataset_dir'):
+        data_root = args.dataset_dir
+
     with torch.no_grad():
         # Check if data_augmentation attribute exists, default to False if not
         data_augmentation = getattr(args, 'data_augmentation', False)
@@ -417,9 +419,16 @@ def updateDataframe(BASE_PATH, dataframe, exact_train_error, exact_test_error, q
     else:
         prefix = '/'
 
-    data = [exact_train_error, exact_test_error, qpu_train_error, qpu_test_error, exact_train_loss[-1], exact_test_loss[-1], qpu_train_loss[-1], qpu_test_loss[-1]]
+    # Handle the case where exact_train_loss and others might be empty lists
+    exact_train_loss_value = exact_train_loss[-1] if exact_train_loss and len(exact_train_loss) > 0 else 0
+    exact_test_loss_value = exact_test_loss[-1] if exact_test_loss and len(exact_test_loss) > 0 else 0
+    qpu_train_loss_value = qpu_train_loss[-1] if qpu_train_loss and len(qpu_train_loss) > 0 else 0
+    qpu_test_loss_value = qpu_test_loss[-1] if qpu_test_loss and len(qpu_test_loss) > 0 else 0
 
-    new_data = pd.DataFrame([data],index=[1],columns=dataframe.columns)
+    data = [exact_train_error, exact_test_error, qpu_train_error, qpu_test_error, 
+            exact_train_loss_value, exact_test_loss_value, qpu_train_loss_value, qpu_test_loss_value]
+
+    new_data = pd.DataFrame([data], index=[1], columns=dataframe.columns)
 
     dataframe = pd.concat([dataframe, new_data], axis=0)
     dataframe.to_csv(BASE_PATH + prefix + 'results.csv')
@@ -427,33 +436,108 @@ def updateDataframe(BASE_PATH, dataframe, exact_train_error, exact_test_error, q
     return dataframe
 
 
-def createPath(args, simu = 'mini-batch'):
+def create_binary_targets(targets, digit, args):
+    """
+    Convert multi-class targets to binary targets for a specific digit
+    
+    Args:
+        targets: Original targets (multi-class)
+        digit: The digit to create binary targets for (0-9)
+        args: Arguments containing mode information
+        
+    Returns:
+        Binary targets (1 for the specified digit, -1 or 0 for other digits)
+    """
+    # Debug the target structure
+    print(f"Creating binary targets for digit {digit}")
+    print(f"Target shape: {targets.shape}")
+    
+    # Get the expanded target size
+    expand_output = args.layersList[2]  # Use all output neurons as binary output
+    
+    # Create binary targets
+    binary_targets = torch.zeros((targets.size(0), expand_output))
+    
+    # Find instances of the target digit
+    if args.mode == "ising":
+        # For ising mode, use -1 and 1
+        binary_targets.fill_(-1)
+        
+        # Determine which samples match the target digit
+        # The target representation depends on the ReshapeTransformTarget class
+        # We need to check if any of the target positions has the value 1
+        # as that indicates this sample belongs to our digit
+        
+        # For each sample, check if it's our target digit
+        for i in range(targets.size(0)):
+            # Check the target - if any position has 1, check which digit it corresponds to
+            non_negative_positions = (targets[i] > 0).nonzero(as_tuple=True)[0]
+            if len(non_negative_positions) > 0:
+                # If any non-negative position corresponds to our digit class
+                # Note: This is a heuristic approach, might need adjustment based on actual encoding
+                target_digit = non_negative_positions[0] // (args.layersList[2] // 10)
+                if target_digit == digit:
+                    binary_targets[i, :] = 1
+    else:  # qubo mode
+        # For qubo mode, use 0 and 1
+        binary_targets.fill_(0)
+        
+        # Similar approach for qubo mode
+        for i in range(targets.size(0)):
+            non_zero_positions = (targets[i] > 0.5).nonzero(as_tuple=True)[0]
+            if len(non_zero_positions) > 0:
+                target_digit = non_zero_positions[0] // (args.layersList[2] // 10)
+                if target_digit == digit:
+                    binary_targets[i, :] = 1
+    
+    # Verify the binary target distribution
+    positive_count = (binary_targets[:, 0] > 0).sum().item()
+    negative_count = (binary_targets[:, 0] < 0).sum().item()
+    print(f"Binary targets: {positive_count} positive samples, {negative_count} negative samples")
+    
+    return binary_targets
+
+
+def createPath(args, digit=None, simu='mini-batch'):
     '''
     Create path to save data
     '''
     if os.name != 'posix':
         prefix = '\\'
-        BASE_PATH = prefix + prefix + "?" + prefix + os.getcwd()
     else:
         prefix = '/'
-        BASE_PATH = '' + os.getcwd()
 
-    BASE_PATH += prefix + 'DATA-SA-'
+    # Use the provided results directory if available
+    if hasattr(args, 'results_dir'):
+        BASE_PATH = args.results_dir
+    else:
+        # Legacy path creation
+        if os.name != 'posix':
+            BASE_PATH = prefix + prefix + "?" + prefix + os.getcwd()
+        else:
+            BASE_PATH = '' + os.getcwd()
 
-    BASE_PATH += prefix + datetime.datetime.now().strftime("%Y-%m-%d")
+        if digit is not None:
+            BASE_PATH += prefix + f'DATA-Binary-Classifier-{digit}'
+        else:
+            BASE_PATH += prefix + 'DATA-SA-'
 
+        BASE_PATH += prefix + datetime.datetime.now().strftime("%Y-%m-%d")
+
+    # Create the base path if it doesn't exist
     if not os.path.exists(BASE_PATH):
         os.makedirs(BASE_PATH)
 
-    # Try to copy plotFunction.py but don't fail if not found
+    # Try to copy plotFunction.py, but don't fail if not found
     try:
         filePath = shutil.copy('plotFunction.py', BASE_PATH)
     except FileNotFoundError:
         try:
-            filePath = shutil.copy('MLP/QA-SA/plotFunction.py', BASE_PATH)
+            filePath = shutil.copy('MLP/Binary-Classifiers/plotFunction.py', BASE_PATH)
         except FileNotFoundError:
             print("Warning: plotFunction.py not found - continuing without it")
 
+    # Determine the experiment subfolder (S-1, S-2, etc.)
     files = os.listdir(BASE_PATH)
 
     if 'plotFunction.py' in files:
@@ -461,27 +545,35 @@ def createPath(args, simu = 'mini-batch'):
     if '.DS_Store' in files:
         files.pop(files.index('.DS_Store'))
 
+    # Find experiment subfolder
+    experiment_path = None
     if not files:
-        BASE_PATH = BASE_PATH + prefix + 'S-1'
+        experiment_path = BASE_PATH + prefix + 'S-1'
     else:
         tab = []
         for names in files:
-            tab.append(int(names.split('-')[1]))
-        if args.load_model == 0:
-            BASE_PATH += prefix + 'S-' + str(max(tab)+1)
+            if '-' in names:
+                try:
+                    tab.append(int(names.split('-')[1]))
+                except (ValueError, IndexError):
+                    continue
+        if not tab:
+            experiment_path = BASE_PATH + prefix + 'S-1'
+        elif args.load_model == 0:
+            experiment_path = BASE_PATH + prefix + 'S-' + str(max(tab)+1)
         elif args.load_model > 0:
-            BASE_PATH += prefix + 'S-' + str(args.load_model)
+            experiment_path = BASE_PATH + prefix + 'S-' + str(args.load_model)
 
+    # Create experiment directories
     if args.load_model == 0:
-        os.mkdir(BASE_PATH)
-        os.mkdir(BASE_PATH + prefix + "Visu_weights")
-        os.mkdir(BASE_PATH + prefix + "Confusion_matrices")
-    name = BASE_PATH.split(prefix)[-1]
+        os.makedirs(experiment_path, exist_ok=True)
+        os.makedirs(experiment_path + prefix + "Visu_weights", exist_ok=True)
+        os.makedirs(experiment_path + prefix + "Confusion_matrices", exist_ok=True)
 
-    return BASE_PATH
+    return experiment_path
 
 
-def saveHyperparameters(BASE_PATH, args, simu = 'mini-batch'):
+def saveHyperparameters(BASE_PATH, args, digit=None, simu='mini-batch'):
     '''
     Save all hyperparameters in the path provided
     '''
@@ -491,14 +583,19 @@ def saveHyperparameters(BASE_PATH, args, simu = 'mini-batch'):
         prefix = '/'
 
     f = open(BASE_PATH + prefix + 'Hyperparameters.txt', 'w')
-    f.write("Equilibrium Propagation with d'wave substrat \n")
+    if digit is not None:
+        f.write(f"Binary Classifier for Digit {digit} with Equilibrium Propagation \n")
+    else:
+        f.write("Equilibrium Propagation with d'wave substrat \n")
+    
     f.write('   Parameters of the simulation \n ')
     if simu == 'mini-batch':
         f.write('Averaging on a mini-batch \n ')
+    elif simu == 'binary-classifier':
+        f.write('Binary classification task \n ')
     else:
         f.write('Averaging on a single data point \n ')
     f.write('\n')
-
 
     for key in args.__dict__.keys():
         f.write(key)
@@ -594,3 +691,122 @@ def plot_functions(net, BASE_PATH, prefix, epoch, args):
         plt.hist(net.weights_1)# bins = np.arange(100), align = 'left',rwidth = 0.9)
         plt.savefig(path + 'histo_weights_1_epoch' + str(epoch+offset) + '.png')
         plt.close()
+
+def train_binary(net, args, train_loader, simu_sampler, exact_sampler, qpu_sampler):
+    '''
+    function to train the binary network for 1 epoch
+    Simplified version of train function for binary classification
+    '''
+    exact_pred, exact_loss = 0, 0
+    qpu_pred, qpu_loss = 0, 0
+
+    with torch.no_grad():
+        for idx, (DATA, TARGET) in enumerate(tqdm(train_loader, position=0, leave=True, desc="Training")):
+            store_seq = None
+            store_s = None
+
+            for k in range(DATA.size()[0]):
+                data, target = DATA[k].numpy(), TARGET[k].numpy()
+
+                ## Free phase
+                model = createBQM(net, args, data)
+
+                # Simulated annealing sampling
+                if args.simulated == 1:
+                    qpu_seq = qpu_sampler.sample(model, num_reads=args.n_iter_free, num_sweeps=100)
+                # QPU sampling
+                else:
+                    qpu_seq = qpu_sampler.sample(model, num_reads=args.n_iter_free, chain_strength=args.chain_strength, auto_scale=args.auto_scale)
+
+                ## Nudge phase: same system except bias for the output layer
+                model = createBQM(net, args, data, beta=net.sign_beta * args.beta, target=target)
+                
+                # Skip if free state already matches target
+                if np.array_equal(qpu_seq.record["sample"][0].reshape(1,-1)[:,args.layersList[1]:][0], target):
+                    qpu_s = qpu_seq
+                else:
+                    # Simulated reverse annealing
+                    if args.simulated == 1:
+                        qpu_s = qpu_sampler.sample(model, num_reads=args.n_iter_nudge, num_sweeps=100, 
+                                                 initial_states=qpu_seq.first.sample, reverse=True, 
+                                                 fraction_annealed=args.frac_anneal_nudge)
+                    # Quantum reverse annealing
+                    else:
+                        reverse_schedule = [[0.0, 1.0], [10, args.frac_anneal_nudge], [20, 1]]
+                        reverse_anneal_params = dict(anneal_schedule=reverse_schedule,
+                                           initial_state=qpu_seq.first.sample,
+                                           reinitialize_state=True)
+                        qpu_s = qpu_sampler.sample(model, num_reads=args.n_iter_nudge, 
+                                                 chain_strength=args.chain_strength, 
+                                                 auto_scale=args.auto_scale, **reverse_anneal_params)
+
+                if store_seq is None:
+                    store_seq = qpu_seq.record["sample"][0].reshape(1, qpu_seq.record["sample"][0].shape[0])
+                    store_s = qpu_s.record["sample"][0].reshape(1, qpu_s.record["sample"][0].shape[0])
+                else:
+                    store_seq = np.concatenate((store_seq, qpu_seq.record["sample"][0].reshape(1, qpu_seq.record["sample"][0].shape[0])),0)
+                    store_s = np.concatenate((store_s, qpu_s.record["sample"][0].reshape(1, qpu_s.record["sample"][0].shape[0])),0)
+
+                del qpu_seq, qpu_s
+                del data, target
+
+            seq = [store_seq[:,:args.layersList[1]], store_seq[:,args.layersList[1]:]]
+            s   = [store_s[:,:args.layersList[1]], store_s[:,args.layersList[1]:]]
+
+            ## Compute loss and error for binary classification
+            loss, pred = net.computeLossAcc(seq, TARGET, args, stage='training')
+
+            qpu_pred += pred
+            qpu_loss += loss
+
+            # Update network parameters
+            net.updateParams(DATA, s, seq, args)
+            net.sign_beta = 1
+
+            del seq, s
+            del DATA, TARGET
+
+    return exact_loss, exact_pred, qpu_loss, qpu_pred
+
+
+def test_binary(net, args, test_loader, simu_sampler, exact_sampler, qpu_sampler):
+    '''
+    function to test the binary network
+    Simplified version of test function for binary classification
+    '''
+    exact_pred, exact_loss = 0, 0
+    qpu_pred, qpu_loss = 0, 0
+
+    with torch.no_grad():
+        for idx, (data, target) in enumerate(tqdm(test_loader, position=0, leave=True, desc="Testing")):
+            data, target = data[0].numpy(), target[0].numpy()
+
+            seq = None
+            model = createBQM(net, args, data)
+
+            # Sampling
+            if args.simulated == 1:
+                qpu_seq = qpu_sampler.sample(model, num_reads=args.n_iter_free, num_sweeps=100)
+
+                # Convert to seq format
+                s = np.array([list(qpu_seq.record["sample"][0])])
+                seq = []
+                seq.append(s[:, :args.layersList[1]])
+                seq.append(s[:, args.layersList[1]:])
+            else:
+                qpu_seq = qpu_sampler.sample(model, num_reads=args.n_iter_free, 
+                                          chain_strength=args.chain_strength, 
+                                          auto_scale=args.auto_scale)
+                qpu_seq = qpu_seq.record["sample"][0].reshape(1, qpu_seq.record["sample"][0].shape[0])
+                seq = [qpu_seq[:, :args.layersList[1]], qpu_seq[:, args.layersList[1]:]]
+
+            # Compute loss and error
+            loss, pred = net.computeLossAcc(seq, target.reshape(1,target.shape[0]), args, stage='testing')
+
+            qpu_pred += pred
+            qpu_loss += loss
+
+            del qpu_seq, seq
+            del data, target
+
+    return exact_loss, exact_pred, qpu_loss, qpu_pred
