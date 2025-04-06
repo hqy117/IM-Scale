@@ -117,7 +117,10 @@ def generate_mnist(args):
     N_data_test = args.N_data_test
 
     with torch.no_grad():
-        if args.data_augmentation:
+        # Check if data_augmentation attribute exists, default to False if not
+        data_augmentation = getattr(args, 'data_augmentation', False)
+        
+        if data_augmentation:
             transforms_train=[torchvision.transforms.ToTensor(), torchvision.transforms.RandomAffine(10, translate=(0.04, 0.04), scale=None, shear=None, interpolation=torchvision.transforms.InterpolationMode.NEAREST, fill=0), ReshapeTransform((-1,))]
         else:
             transforms_train=[torchvision.transforms.ToTensor(), ReshapeTransform((-1,))]
@@ -313,36 +316,37 @@ def train(net, args, train_loader, simu_sampler, exact_sampler, qpu_sampler):
 
 def test(net, args, test_loader, simu_sampler, exact_sampler, qpu_sampler):
     '''
-    function to train the network for 1 epoch
+    function to test the performance of the network on testset
     '''
     exact_pred, exact_loss = 0, 0
     qpu_pred, qpu_loss = 0, 0
 
     with torch.no_grad():
         for idx, (data, target) in enumerate(tqdm(test_loader, position=0, leave=True)):
-            data, target = data.numpy()[0], target.numpy()[0]
+            data, target = data[0].numpy(), target[0].numpy()
 
-            ## Free phase
+            seq = None
+            exact_seq = None
+
             model = createBQM(net, args, data)
 
-            # Simulated annealing sampling
+            #Simulated annealing sampling
             if args.simulated == 1:
                 qpu_seq = qpu_sampler.sample(model, num_reads = args.n_iter_free, num_sweeps = 100)
 
-            # QPU sampling
-            else:
-                qpu_seq = qpu_sampler.sample(model, num_reads = args.n_iter_free, chain_strength = args.chain_strength, auto_scale = args.auto_scale)
-            ## Compute loss and error for simulated sampling
+                # Conver QUBO/Ising solution to seq format
+
+                s = np.array([list(qpu_seq.record["sample"][0])])
+                seq = []
+                seq.append(s[:, :args.layersList[1]])
+                seq.append(s[:, args.layersList[1]:])
+
+            # Use exact solver
+            #exact_seq = exact_solver(model)
             #loss, pred = net.computeLossError(exact_seq, target, args)
-
-            #exact_pred += pred
-            #exact_loss += loss
-
-            ## Compute loss and error for QPU sampling
-            qpu_seq = qpu_seq.record["sample"][0].reshape(1, qpu_seq.record["sample"][0].shape[0])
-            seq = [qpu_seq[:, :args.layersList[1]], qpu_seq[:, args.layersList[1]:]]
-
-            loss, pred = net.computeLossError(seq, target.reshape(1,target.shape[0]), args, stage = 'testing')
+            
+            # Compute loss and error
+            loss, pred = net.computeLossAcc(seq, target.reshape(1,target.shape[0]), args, stage = 'testing')
 
             qpu_pred += pred
             qpu_loss += loss
